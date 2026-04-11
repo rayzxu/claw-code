@@ -1,0 +1,90 @@
+{
+  "name": "materials-search",
+  "version": "0.1.0",
+  "description": "Bundled material Excel search tool for local material master and B-side hardener classification workbooks.",
+  "defaultEnabled": true,
+  "permissions": ["read"],
+  "tools": [
+    {
+      "name": "materials_search",
+      "description": "Search local material Excel workbooks by material code, CAS, chemical name, category, hardener family, or B-side compatibility rules. Use for material master lookup, material property lookup, and B-side hardener safety checks from the configured Excel files.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["schema", "lookup", "search", "filter", "validate"],
+            "description": "Operation to run. Defaults to schema when omitted."
+          },
+          "query": {
+            "type": "string",
+            "description": "Free-text query for action=search."
+          },
+          "materials": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Material codes or names to look up or validate."
+          },
+          "cas_numbers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "CAS numbers to look up in the material master workbook."
+          },
+          "field": {
+            "type": "string",
+            "enum": ["all", "material", "chemical", "cas", "text"],
+            "description": "Search field for action=search."
+          },
+          "family": {
+            "type": "string",
+            "description": "Hardener family filter, for example 胺类, 酸酐, or 预浸料."
+          },
+          "category": {
+            "type": "string",
+            "description": "Material category filter, for example 固化剂, 促进剂, or 树脂."
+          },
+          "has_fields": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Column names that must be non-empty for action=filter."
+          },
+          "target_family": {
+            "type": "string",
+            "description": "Target family for action=validate."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Maximum number of material master rows to return."
+          },
+          "include_all_fields": {
+            "type": "boolean",
+            "description": "Include complete raw workbook rows in material master results."
+          },
+          "data_dir": {
+            "type": "string",
+            "description": "Directory containing the default material Excel workbooks."
+          },
+          "workbooks": {
+            "type": "object",
+            "properties": {
+              "master_map_path": {
+                "type": "string",
+                "description": "Explicit path to material_label_map_w_chemicalname_分類_性質數據.xlsx."
+              },
+              "b_classification_path": {
+                "type": "string",
+                "description": "Explicit path to 原材料分类.xlsx."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "command": "./tools/materials_search",
+      "requiredPermission": "read-only"
+    }
+  ]
+}

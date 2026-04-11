@@ -1,0 +1,50 @@
+{
+  "name": "material-fact-lookup",
+  "version": "0.1.0",
+  "description": "Bundled offline material fact lookup tool for expert material knowledge exported from Qdrant.",
+  "defaultEnabled": true,
+  "permissions": ["read"],
+  "tools": [
+    {
+      "name": "material_facts_lookup",
+      "description": "Query the offline expert material knowledge export for TDS, SDS, MSDS, material properties, and evidence snippets. Use for exact material-code lookup first, then lexical, semantic, or hybrid evidence retrieval over the configured expert knowledge export.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["schema", "lookup", "search", "profile"],
+            "description": "Operation to run. Defaults to schema when omitted."
+          },
+          "materials": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Exact material codes to look up or filter by."
+          },
+          "query": {
+            "type": "string",
+            "description": "Free-text query for search or profile."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["hybrid", "semantic", "lexical"],
+            "description": "Retrieval mode for search or query-backed profile."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Maximum number of evidence entries to return."
+          },
+          "export_path": {
+            "type": "string",
+            "description": "Explicit path to the offline material expert export JSON."
+          }
+        },
+        "additionalProperties": false
+      },
+      "command": "./tools/material_facts_lookup",
+      "requiredPermission": "read-only"
+    }
+  ]
+}

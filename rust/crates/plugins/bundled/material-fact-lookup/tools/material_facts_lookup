@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+run_with_python() {
+  candidate="$1"
+  if [ -z "$candidate" ]; then
+    return 1
+  fi
+  if [ -x "$candidate" ]; then
+    exec "$candidate" "$SCRIPT_DIR/material_facts_lookup.py"
+  fi
+  if command -v "$candidate" >/dev/null 2>&1; then
+    exec "$candidate" "$SCRIPT_DIR/material_facts_lookup.py"
+  fi
+  return 1
+}
+
+run_with_python "${OPENCLAW_PYTHON_BIN:-}" || true
+run_with_python "${WAM_PYTHON_BIN:-}" || true
+
+if [ -n "${OPENCLAW_WORKSPACE:-}" ]; then
+  run_with_python "$OPENCLAW_WORKSPACE/.venv/bin/python" || true
+fi
+
+if [ -n "${CLAWD_PLUGIN_ROOT:-}" ]; then
+  run_with_python "$CLAWD_PLUGIN_ROOT/.venv/bin/python" || true
+fi
+
+run_with_python python3 || true
+
+printf '%s\n' "material_facts_lookup: no usable Python interpreter found" >&2
+exit 127

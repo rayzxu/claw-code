@@ -2943,6 +2943,15 @@ mod tests {
         assert!(installed
             .iter()
             .any(|plugin| plugin.metadata.id == "sample-hooks@bundled"));
+        assert!(installed
+            .iter()
+            .any(|plugin| plugin.metadata.id == "materials-search@bundled"));
+        assert!(installed
+            .iter()
+            .any(|plugin| plugin.metadata.id == "material-fact-lookup@bundled"));
+        assert!(installed
+            .iter()
+            .any(|plugin| plugin.metadata.id == "baseline-recipe-selection@bundled"));
 
         let _ = fs::remove_dir_all(config_home);
     }
@@ -3379,11 +3388,25 @@ mod tests {
             .expect("install should succeed");
 
         let tools = manager.aggregated_tools().expect("tools should aggregate");
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].definition().name, "plugin_echo");
-        assert_eq!(tools[0].required_permission(), "workspace-write");
+        assert!(tools
+            .iter()
+            .any(|tool| tool.definition().name == "materials_search"
+                && tool.required_permission() == "read-only"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.definition().name == "material_facts_lookup"
+                && tool.required_permission() == "read-only"));
+        assert!(tools
+            .iter()
+            .any(|tool| tool.definition().name == "baseline_recipe_selection"
+                && tool.required_permission() == "read-only"));
+        let plugin_echo = tools
+            .iter()
+            .find(|tool| tool.definition().name == "plugin_echo")
+            .expect("plugin_echo should aggregate");
+        assert_eq!(plugin_echo.required_permission(), "workspace-write");
 
-        let output = tools[0]
+        let output = plugin_echo
             .execute(&serde_json::json!({ "message": "hello" }))
             .expect("plugin tool should execute");
         let payload: Value = serde_json::from_str(&output).expect("valid json");

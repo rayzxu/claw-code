@@ -1,0 +1,86 @@
+{
+  "name": "baseline-recipe-selection",
+  "version": "0.1.0",
+  "description": "Bundled baseline recipe selection tool backed by local recipe export JSON files.",
+  "defaultEnabled": true,
+  "permissions": ["read"],
+  "tools": [
+    {
+      "name": "baseline_recipe_selection",
+      "description": "Select ranked baseline recipes from local historical recipe export JSON. Use for baseline recipe selection, explainable historical ranking, material-plus-test similarity ranking, and returning detailed normalized experiment records instead of only baseline IDs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["schema", "select"],
+            "description": "Operation to run. Defaults to schema when omitted."
+          },
+          "material_groups": {
+            "type": "object",
+            "properties": {
+              "resin": {
+                "type": "object",
+                "properties": {
+                  "required": { "type": "array", "items": { "type": "string" } },
+                  "recommended": { "type": "array", "items": { "type": "string" } }
+                },
+                "additionalProperties": false
+              },
+              "hardener": {
+                "type": "object",
+                "properties": {
+                  "required": { "type": "array", "items": { "type": "string" } },
+                  "recommended": { "type": "array", "items": { "type": "string" } }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false,
+            "description": "Preferred resin and hardener material pools."
+          },
+          "test_constraints": {
+            "type": "object",
+            "description": "Record of test constraints keyed by test name. Values support a single constraint object or a temperature-indexed map of constraint objects."
+          },
+          "hardener_system_type": {
+            "type": "string",
+            "enum": ["AMINE", "ANHYDRIDE", "PREPREG", "SPECIAL_AMINE"],
+            "description": "Optional explicit hardener system type."
+          },
+          "expert_opinion": {
+            "type": "string",
+            "description": "Optional expert text used to infer allowed hardener system families."
+          },
+          "ranking_priority": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "ranking_priority": { "type": "string" },
+                "temperature": { "type": "number" }
+              },
+              "required": ["index", "ranking_priority"],
+              "additionalProperties": false
+            },
+            "description": "Optional ranking order for test constraints."
+          },
+          "top_k": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Maximum number of ranked baseline recipes to return. Defaults to 5."
+          },
+          "export_path": {
+            "type": "string",
+            "description": "Optional local path to a merged recipe export JSON or a directory containing resin/hardener/mixture/mechanics raw export JSON files."
+          }
+        },
+        "additionalProperties": false
+      },
+      "command": "./tools/baseline_recipe_selection",
+      "requiredPermission": "read-only"
+    }
+  ]
+}
