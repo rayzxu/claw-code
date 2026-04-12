@@ -145,9 +145,12 @@ def base_response(action: str) -> dict[str, Any]:
         "source_files": [],
         "query_summary": {"action": action},
         "material_resolution": [],
+        "role_summary": {},
         "input_summary": {},
         "hard_filter": {},
         "history_summary": {},
+        "recommendation_summary": {},
+        "model_summary": {},
         "example_records": [],
         "suggestions": [],
         "warnings": [],
@@ -337,6 +340,51 @@ def classify_material_state(entry: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def infer_component_role(entry: dict[str, Any] | None, state_info: dict[str, Any]) -> dict[str, Any]:
+    category = clean_text(state_info.get("category") or (entry.get("category") if entry else ""))
+    family = clean_text(state_info.get("family") or (entry.get("family") if entry else ""))
+    state = clean_text(state_info.get("state"))
+    evidence: list[str] = []
+
+    def build(role_key: str, role_label: str, confidence: str, reason: str) -> dict[str, Any]:
+        return {
+            "role_key": role_key,
+            "role_label": role_label,
+            "role_confidence": confidence,
+            "role_reason": reason,
+        }
+
+    if state == "solid" and "促进剂/固化剂" in category:
+        evidence.append(f"category={category}")
+        return build("latent_curing_package_solid", "潜伏固化包固体", "high", ",".join(evidence))
+    if state == "solid" and "固化剂" in category:
+        evidence.append(f"category={category}")
+        if "预浸料" in family:
+            evidence.append(f"family={family}")
+        return build("curing_agent_solid", "固化剂固体", "high", ",".join(evidence))
+    if state == "solid" and "促进剂" in category:
+        evidence.append(f"category={category}")
+        return build("accelerator_solid", "促进剂固体", "high", ",".join(evidence))
+    if state == "solid" and any(token in category for token in ["填料", "阻燃剂"]):
+        evidence.append(f"category={category}")
+        return build("functional_filler_solid", "功能粉体", "medium", ",".join(evidence))
+    if state == "liquid" and "树脂" in category:
+        evidence.append(f"category={category}")
+        return build("carrier_resin_liquid", "载体树脂液体", "high", ",".join(evidence))
+    if state == "liquid" and any(token in category for token in ["稀释剂", "偶联剂", "消泡剂", "色浆", "色膏"]):
+        evidence.append(f"category={category}")
+        return build("process_additive_liquid", "工艺助剂液体", "high", ",".join(evidence))
+    if state == "liquid":
+        if category:
+            evidence.append(f"category={category}")
+        return build("liquid_component", "液体组分", "medium", ",".join(evidence) or "state=liquid")
+    if state == "solid":
+        if category:
+            evidence.append(f"category={category}")
+        return build("solid_component", "固体组分", "medium", ",".join(evidence) or "state=solid")
+    return build("unknown_component", "待确认组分", "low", "state=unknown")
+
+
 def normalize_components(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
     raw_components = payload.get("components")
@@ -423,6 +471,7 @@ def enrich_input_components(
             amount = total_b_amount * float(component.get("proportion") or 0.0) / 100.0
         entry = master_store["entries"][master_store["index"][component["normalized_material"]]] if component["normalized_material"] in master_store["index"] else None
         state_info = classify_material_state(entry)
+        role_info = infer_component_role(entry, state_info)
         enriched.append(
             {
                 "material": component["material"],
@@ -435,9 +484,42 @@ def enrich_input_components(
                 "category": state_info["category"],
                 "family": state_info["family"],
                 "appearance": state_info["appearance"],
+                "role_key": role_info["role_key"],
+                "role_label": role_info["role_label"],
+                "role_confidence": role_info["role_confidence"],
+                "role_reason": role_info["role_reason"],
             }
         )
     return enriched
+
+
+def summarize_roles(components: list[dict[str, Any]]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    amounts: dict[str, float] = {}
+    labels: dict[str, str] = {}
+    for component in components:
+        role_key = clean_text(component.get("role_key"))
+        if not role_key:
+            continue
+        counts[role_key] = counts.get(role_key, 0) + 1
+        amounts[role_key] = amounts.get(role_key, 0.0) + float(component.get("amount") or 0.0)
+        labels[role_key] = clean_text(component.get("role_label")) or role_key
+    ordered_roles = sorted(
+        (
+            {
+                "role_key": role_key,
+                "role_label": labels.get(role_key) or role_key,
+                "component_count": counts[role_key],
+                "total_amount": round(amounts[role_key], 6),
+            }
+            for role_key in counts
+        ),
+        key=lambda item: (-float(item["total_amount"]), item["role_key"]),
+    )
+    return {
+        "role_count": len(ordered_roles),
+        "roles": ordered_roles,
+    }
 
 
 def summarize_components(components: list[dict[str, Any]], total_b_amount: float | None) -> dict[str, Any]:
@@ -692,6 +774,106 @@ def build_history_summary(
     return summary
 
 
+def intersect_windows(left_min: float | None, left_max: float | None, right_min: float | None, right_max: float | None) -> dict[str, Any]:
+    if None in {left_min, left_max, right_min, right_max}:
+        return {
+            "history_min": left_min,
+            "history_max": left_max,
+            "hard_rule_min": right_min,
+            "hard_rule_max": right_max,
+            "intersection_min": None,
+            "intersection_max": None,
+            "has_overlap": False,
+        }
+    low = max(float(left_min), float(right_min))
+    high = min(float(left_max), float(right_max))
+    return {
+        "history_min": round(float(left_min), 6),
+        "history_max": round(float(left_max), 6),
+        "hard_rule_min": round(float(right_min), 6),
+        "hard_rule_max": round(float(right_max), 6),
+        "intersection_min": round(low, 6),
+        "intersection_max": round(high, 6),
+        "has_overlap": low <= high,
+    }
+
+
+def build_recommendation_summary(
+    *,
+    input_summary: dict[str, Any],
+    hard_filter: dict[str, Any],
+    history_summary: dict[str, Any],
+) -> dict[str, Any]:
+    hard_rule_window = hard_filter.get("allowed_amount_window") if isinstance(hard_filter.get("allowed_amount_window"), dict) else {}
+    solid_history = history_summary.get("solid_amount_window") if isinstance(history_summary.get("solid_amount_window"), dict) else {}
+    liquid_history = history_summary.get("liquid_amount_window") if isinstance(history_summary.get("liquid_amount_window"), dict) else {}
+
+    solid_range = intersect_windows(
+        solid_history.get("recommended_min"),
+        solid_history.get("recommended_max"),
+        hard_rule_window.get("solid_min"),
+        hard_rule_window.get("solid_max"),
+    )
+    liquid_range = intersect_windows(
+        liquid_history.get("recommended_min"),
+        liquid_history.get("recommended_max"),
+        hard_rule_window.get("liquid_min"),
+        hard_rule_window.get("liquid_max"),
+    )
+
+    actual_solid = as_float(input_summary.get("solid_amount"))
+    actual_liquid = as_float(input_summary.get("liquid_amount"))
+    hard_status = clean_text(hard_filter.get("status"))
+    has_overlap = bool(solid_range.get("has_overlap")) and bool(liquid_range.get("has_overlap"))
+    within_recommended_window = (
+        has_overlap
+        and actual_solid is not None
+        and actual_liquid is not None
+        and float(solid_range["intersection_min"]) <= actual_solid <= float(solid_range["intersection_max"])
+        and float(liquid_range["intersection_min"]) <= actual_liquid <= float(liquid_range["intersection_max"])
+    )
+
+    operable = hard_status == "pass" and has_overlap
+    if hard_status == "blocked":
+        operability_status = "blocked"
+        message = "当前输入无法完成可操作性判断。"
+    elif hard_status == "fail":
+        operability_status = "not_operable"
+        message = "当前配方未通过液固硬筛选，不建议直接操作。"
+    elif not has_overlap:
+        operability_status = "needs_review"
+        message = "历史窗口与硬规则窗口没有形成稳定交集，建议人工复核。"
+    elif within_recommended_window:
+        operability_status = "operable"
+        message = "当前配方落在历史+硬规则共同窗口内，可操作。"
+    else:
+        operability_status = "operable_with_adjustment"
+        message = "当前配方通过硬筛选，可操作，但未落在历史推荐绝对量窗口内，建议继续调优。"
+
+    return {
+        "operable": operable,
+        "operability_status": operability_status,
+        "message": message,
+        "recommended_solid_amount_range": {
+            "min": solid_range.get("intersection_min"),
+            "max": solid_range.get("intersection_max"),
+        },
+        "recommended_liquid_amount_range": {
+            "min": liquid_range.get("intersection_min"),
+            "max": liquid_range.get("intersection_max"),
+        },
+        "recommended_ratio_range": {
+            "min": hard_filter.get("rule", {}).get("liquid_to_solid_min") if isinstance(hard_filter.get("rule"), dict) else None,
+            "max": hard_filter.get("rule", {}).get("liquid_to_solid_max") if isinstance(hard_filter.get("rule"), dict) else None,
+            "actual": input_summary.get("liquid_to_solid_ratio"),
+        },
+        "window_breakdown": {
+            "solid": solid_range,
+            "liquid": liquid_range,
+        },
+    }
+
+
 def build_example_records(
     history_rows: list[dict[str, Any]],
     *,
@@ -744,7 +926,93 @@ def schema_payload() -> dict[str, Any]:
             "该工具只针对预浸料 B 剂设计。",
             "历史统计从本地 recipe cache pickle 或 baseline export JSON 读取。",
             "物料液体/固体相态从 material_label_map_w_chemicalname_分類_性質數據.xlsx 推断。",
+            "输出会包含组分角色识别、推荐绝对量区间，以及适合模型消费的简化 JSON 摘要。",
         ],
+    }
+
+
+def build_model_summary(
+    *,
+    material_resolution: list[dict[str, Any]],
+    input_summary: dict[str, Any],
+    recommendation_summary: dict[str, Any],
+    hard_filter: dict[str, Any],
+    suggestions: list[str],
+) -> dict[str, Any]:
+    operability_status = clean_text(recommendation_summary.get("operability_status"))
+    hard_filter_status = clean_text(hard_filter.get("status"))
+    next_action_key = "manual_review"
+    next_action_message = clean_text(recommendation_summary.get("message"))
+    if operability_status == "blocked":
+        next_action_key = "resolve_unknowns"
+    elif operability_status == "not_operable":
+        if hard_filter_status == "fail":
+            actual_ratio = as_float(input_summary.get("liquid_to_solid_ratio"))
+            ratio_rule = hard_filter.get("rule") if isinstance(hard_filter.get("rule"), dict) else {}
+            ratio_min = as_float(ratio_rule.get("liquid_to_solid_min"))
+            ratio_max = as_float(ratio_rule.get("liquid_to_solid_max"))
+            if actual_ratio is not None and ratio_min is not None and actual_ratio < ratio_min:
+                next_action_key = "add_liquid_or_reduce_solid"
+            elif actual_ratio is not None and ratio_max is not None and actual_ratio > ratio_max:
+                next_action_key = "add_solid_or_reduce_liquid"
+            else:
+                next_action_key = "rebalance_formula"
+        else:
+            next_action_key = "rebalance_formula"
+    elif operability_status == "needs_review":
+        next_action_key = "manual_review"
+    elif operability_status == "operable_with_adjustment":
+        next_action_key = "tune_to_window"
+    elif operability_status == "operable":
+        next_action_key = "use_as_is"
+    if suggestions:
+        next_action_message = suggestions[0]
+
+    return {
+        "decision": {
+            "operable": bool(recommendation_summary.get("operable")),
+            "status": recommendation_summary.get("operability_status"),
+            "reason": recommendation_summary.get("message"),
+            "hard_filter_status": hard_filter.get("status"),
+        },
+        "target_window": {
+            "solid_amount_min": recommendation_summary.get("recommended_solid_amount_range", {}).get("min")
+            if isinstance(recommendation_summary.get("recommended_solid_amount_range"), dict) else None,
+            "solid_amount_max": recommendation_summary.get("recommended_solid_amount_range", {}).get("max")
+            if isinstance(recommendation_summary.get("recommended_solid_amount_range"), dict) else None,
+            "liquid_amount_min": recommendation_summary.get("recommended_liquid_amount_range", {}).get("min")
+            if isinstance(recommendation_summary.get("recommended_liquid_amount_range"), dict) else None,
+            "liquid_amount_max": recommendation_summary.get("recommended_liquid_amount_range", {}).get("max")
+            if isinstance(recommendation_summary.get("recommended_liquid_amount_range"), dict) else None,
+            "ratio_min": recommendation_summary.get("recommended_ratio_range", {}).get("min")
+            if isinstance(recommendation_summary.get("recommended_ratio_range"), dict) else None,
+            "ratio_max": recommendation_summary.get("recommended_ratio_range", {}).get("max")
+            if isinstance(recommendation_summary.get("recommended_ratio_range"), dict) else None,
+        },
+        "current": {
+            "total_b_amount": input_summary.get("total_b_amount"),
+            "solid_amount": input_summary.get("solid_amount"),
+            "liquid_amount": input_summary.get("liquid_amount"),
+            "unknown_amount": input_summary.get("unknown_amount"),
+            "liquid_to_solid_ratio": input_summary.get("liquid_to_solid_ratio"),
+        },
+        "components": [
+            {
+                "material": component.get("material"),
+                "amount": component.get("amount"),
+                "state": component.get("state"),
+                "role": component.get("role_key"),
+                "confidence": {
+                    "state": component.get("state_confidence"),
+                    "role": component.get("role_confidence"),
+                },
+            }
+            for component in material_resolution
+        ],
+        "next_action": {
+            "action": next_action_key,
+            "message": next_action_message,
+        },
     }
 
 
@@ -829,9 +1097,15 @@ def run_tool(payload: dict[str, Any]) -> dict[str, Any]:
         response["warnings"].append("No usable prepreg B-side history rows were extracted from the history source.")
 
     response["material_resolution"] = resolved_components
+    response["role_summary"] = summarize_roles(resolved_components)
     response["input_summary"] = input_summary
     response["hard_filter"] = hard_filter
     response["history_summary"] = history_summary
+    response["recommendation_summary"] = build_recommendation_summary(
+        input_summary=input_summary,
+        hard_filter=hard_filter,
+        history_summary=history_summary,
+    )
     response["example_records"] = build_example_records(
         history_rows,
         current_components=resolved_components,
@@ -846,12 +1120,21 @@ def run_tool(payload: dict[str, Any]) -> dict[str, Any]:
         response["warnings"].append(hard_filter_message)
 
     if hard_filter.get("status") == "pass" and history_rows:
-        combined = history_summary.get("combined_solid_guidance")
-        if isinstance(combined, dict) and combined.get("has_overlap") is False:
+        recommendation_summary = response["recommendation_summary"]
+        solid_window = recommendation_summary.get("window_breakdown", {}).get("solid") if isinstance(recommendation_summary.get("window_breakdown"), dict) else {}
+        if isinstance(solid_window, dict) and solid_window.get("has_overlap") is False:
             response["warnings"].append("当前总 B 量对应的硬规则固体窗口与历史固体窗口没有重叠，建议复核总量设定。")
             response["suggestions"].append(
-                f"历史推荐固体范围约为 {combined.get('history_min')} - {combined.get('history_max')}，"
-                f"但按当前总 B 量硬规则允许范围仅为 {combined.get('hard_rule_min')} - {combined.get('hard_rule_max')}。"
+                f"历史推荐固体范围约为 {solid_window.get('history_min')} - {solid_window.get('history_max')}，"
+                f"但按当前总 B 量硬规则允许范围仅为 {solid_window.get('hard_rule_min')} - {solid_window.get('hard_rule_max')}。"
             )
+
+    response["model_summary"] = build_model_summary(
+        material_resolution=resolved_components,
+        input_summary=input_summary,
+        recommendation_summary=response["recommendation_summary"],
+        hard_filter=hard_filter,
+        suggestions=response["suggestions"],
+    )
 
     return apply_status(response)

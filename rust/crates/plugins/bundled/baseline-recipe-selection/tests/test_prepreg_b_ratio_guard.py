@@ -132,6 +132,18 @@ class PrepregBRatioGuardTests(unittest.TestCase):
         self.assertEqual(analyzed["hard_filter"]["status"], "pass")
         self.assertAlmostEqual(analyzed["input_summary"]["liquid_to_solid_ratio"], 2.25, places=4)
         self.assertEqual(analyzed["history_summary"]["dataset_count"], 3)
+        self.assertEqual(analyzed["material_resolution"][0]["role_key"], "curing_agent_solid")
+        self.assertEqual(analyzed["material_resolution"][1]["role_key"], "carrier_resin_liquid")
+        self.assertTrue(analyzed["recommendation_summary"]["operable"])
+        self.assertEqual(analyzed["recommendation_summary"]["operability_status"], "operable_with_adjustment")
+        self.assertTrue(analyzed["recommendation_summary"]["recommended_solid_amount_range"]["min"] is not None)
+        self.assertTrue(analyzed["recommendation_summary"]["recommended_liquid_amount_range"]["min"] is not None)
+        self.assertTrue(analyzed["role_summary"]["roles"])
+        self.assertTrue(analyzed["model_summary"]["decision"]["operable"])
+        self.assertEqual(set(analyzed["model_summary"].keys()), {"decision", "target_window", "current", "components", "next_action"})
+        self.assertEqual(analyzed["model_summary"]["components"][0]["role"], "curing_agent_solid")
+        self.assertEqual(analyzed["model_summary"]["decision"]["status"], "operable_with_adjustment")
+        self.assertEqual(analyzed["model_summary"]["next_action"]["action"], "tune_to_window")
         self.assertTrue(analyzed["example_records"])
 
     def test_fail_case_and_wrapper(self) -> None:
@@ -146,6 +158,10 @@ class PrepregBRatioGuardTests(unittest.TestCase):
         )
         self.assertEqual(analyzed["status"], "warning")
         self.assertEqual(analyzed["hard_filter"]["status"], "fail")
+        self.assertFalse(analyzed["recommendation_summary"]["operable"])
+        self.assertEqual(analyzed["recommendation_summary"]["operability_status"], "not_operable")
+        self.assertFalse(analyzed["model_summary"]["decision"]["operable"])
+        self.assertEqual(analyzed["model_summary"]["next_action"]["action"], "add_liquid_or_reduce_solid")
         self.assertIn("至少再增加", analyzed["suggestions"][0])
 
         wrapper = ROOT / "tools" / "prepreg_b_ratio_guard"
