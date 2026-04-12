@@ -1,0 +1,69 @@
+{
+  "env": "bundled",
+  "qdrant_url": "offline",
+  "exported_at": "2026-04-11T00:00:00Z",
+  "collections": ["resin", "hardener", "mixture", "mechanics"],
+  "items": [
+    {
+      "experimentId": "exp-1",
+      "collections_present": ["resin", "hardener", "mixture", "mechanics"],
+      "source_record_counts": {"resin": 1, "hardener": 1, "mixture": 1, "mechanics": 1},
+      "source_point_ids": {"resin": ["rec-1"], "hardener": ["rec-1"], "mixture": ["rec-1"], "mechanics": ["rec-1"]},
+      "merged_payload": {
+        "experimentId": "exp-1",
+        "materialGroups": {
+          "resin": {"groupName": "A1", "proportion": 100.0, "components": {"EL-127": 86.55, "C-2475": 13.4}},
+          "hardener": {"groupName": "B1", "proportion": 22.0, "components": {"H-50": 19.4, "WG-24": 20.0}}
+        },
+        "mix_ratio": "100:22",
+        "hardener_system_family": "胺类体系",
+        "hc_subtype_primary": "脂环族胺类",
+        "department": "研发部",
+        "tests": {
+          "resin_viscosity": {"25": 420.0},
+          "EEW": 185.0,
+          "resin_density": {"25": 1.16},
+          "hardener_viscosity": {"25": 55.0},
+          "AHEW": 61.0,
+          "mixed_viscosity": {"25": 210.0},
+          "pot_life": {"25": 40.0},
+          "gel_time": {"25": 30.0},
+          "Tg": 132.0,
+          "impact_resistance": 18.0
+        },
+        "curing_condition_temp1": 80,
+        "curing_condition_time1": 120
+      }
+    },
+    {
+      "experimentId": "exp-2",
+      "collections_present": ["resin", "hardener", "mixture", "mechanics"],
+      "source_record_counts": {"resin": 1, "hardener": 1, "mixture": 1, "mechanics": 1},
+      "source_point_ids": {"resin": ["rec-2"], "hardener": ["rec-2"], "mixture": ["rec-2"], "mechanics": ["rec-2"]},
+      "merged_payload": {
+        "experimentId": "exp-2",
+        "materialGroups": {
+          "resin": {"groupName": "A2", "proportion": 100.0, "components": {"EL-127": 60.0, "C-2460": 40.0}},
+          "hardener": {"groupName": "B2", "proportion": 30.0, "components": {"H-19-G": 100.0}}
+        },
+        "mix_ratio": "100:30",
+        "hardener_system_family": "酸酐类体系",
+        "hc_subtype_primary": "酸酐",
+        "department": "研发部",
+        "tests": {
+          "resin_viscosity": {"25": 680.0},
+          "EEW": 188.0,
+          "hardener_viscosity": {"25": 90.0},
+          "AHEW": 110.0,
+          "mixed_viscosity": {"25": 640.0},
+          "pot_life": {"25": 18.0},
+          "gel_time": {"25": 12.0},
+          "Tg": 98.0,
+          "impact_resistance": 9.0
+        },
+        "curing_condition_temp1": 120,
+        "curing_condition_time1": 180
+      }
+    }
+  ]
+}

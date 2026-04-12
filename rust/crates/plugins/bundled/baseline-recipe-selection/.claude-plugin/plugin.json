@@ -1,7 +1,7 @@
 {
   "name": "baseline-recipe-selection",
   "version": "0.1.0",
-  "description": "Bundled baseline recipe selection tool backed by local recipe export JSON files.",
+  "description": "Bundled baseline recipe tools for historical recipe selection and prepreg B-side liquid-solid ratio guidance.",
   "defaultEnabled": true,
   "permissions": ["read"],
   "tools": [
@@ -80,6 +80,95 @@
         "additionalProperties": false
       },
       "command": "./tools/baseline_recipe_selection",
+      "requiredPermission": "read-only"
+    },
+    {
+      "name": "prepreg_b_ratio_guard",
+      "description": "Analyze prepreg B-side formulations using historical usage statistics plus a hard liquid:solid ratio gate. Use for prepreg B剂 solid dosing, liquid-vs-powder balancing, and checking whether a planned B-side recipe is likely too dry to mix.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["schema", "analyze"],
+            "description": "Operation to run. Defaults to schema when omitted."
+          },
+          "components": {
+            "type": "array",
+            "description": "Planned B-side materials. Each item should provide either amount or proportion.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "material": { "type": "string" },
+                "amount": { "type": "number" },
+                "proportion": { "type": "number" }
+              },
+              "required": ["material"],
+              "additionalProperties": false
+            }
+          },
+          "b_total_amount": {
+            "type": "number",
+            "description": "Total B-side amount on the current basis. Required when components use proportion; optional when components use amount."
+          },
+          "mix_ratio_hardener": {
+            "type": "number",
+            "description": "Alias of b_total_amount, for example the B value in a 100:15 mix ratio."
+          },
+          "hardener_system_type": {
+            "type": "string",
+            "enum": ["PREPREG"],
+            "description": "Currently only PREPREG is supported."
+          },
+          "ratio_limits": {
+            "type": "object",
+            "properties": {
+              "liquid_to_solid_min": { "type": "number" },
+              "liquid_to_solid_max": { "type": "number" }
+            },
+            "additionalProperties": false,
+            "description": "Override the hard liquid:solid screening window. Defaults to 1.5-2.5."
+          },
+          "history_path": {
+            "type": "string",
+            "description": "Optional local recipe history source. Supports recipe cache .pkl files or baseline export JSON/directory."
+          },
+          "material_data_dir": {
+            "type": "string",
+            "description": "Directory containing material_label_map_w_chemicalname_分類_性質數據.xlsx."
+          },
+          "workbooks": {
+            "type": "object",
+            "properties": {
+              "master_map_path": {
+                "type": "string",
+                "description": "Explicit path to material_label_map_w_chemicalname_分類_性質數據.xlsx."
+              }
+            },
+            "additionalProperties": false
+          },
+          "history_lower_percentile": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 49,
+            "description": "Lower percentile used for the historical solid/liquid recommendation window."
+          },
+          "history_upper_percentile": {
+            "type": "integer",
+            "minimum": 51,
+            "maximum": 100,
+            "description": "Upper percentile used for the historical solid/liquid recommendation window."
+          },
+          "example_limit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 20,
+            "description": "Number of closest historical examples to return."
+          }
+        },
+        "additionalProperties": false
+      },
+      "command": "./tools/prepreg_b_ratio_guard",
       "requiredPermission": "read-only"
     }
   ]
