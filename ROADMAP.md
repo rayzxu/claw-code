@@ -5030,19 +5030,3 @@ ear], /color [scheme], /effort [low|medium|high], /fast, /summary, /tag [label],
    **Blocker.** None. Requires a UUID/nanoid generated at session init and threaded through the event emitter.
 
    **Source.** Jobdori dogfood 2026-04-21 01:54 KST on main HEAD `50e3fa3` during recurring cron cycle. Joins **Session identity completeness at creation time** (ROADMAP §4.7) — §4.7 covers identity fields at creation time; #134 covers the stable correlation handle that ties those fields to downstream events. Joins **Event provenance / environment labeling** (§4.6) — provenance requires a stable anchor; without `session.id` the provenance chain is broken at the root. Natural bundle with **#241** (no startup run/correlation id, filed by gaebal-gajae 2026-04-20) — #241 approached from the startup cluster; #134 approaches from the event-stream observer side. Same root fix closes both. Session tally: ROADMAP #134.
-
-## Pinpoint #134. No run/correlation ID at session boundary — every observer must infer session identity from timing or prompt content
-
-   **Gap.** When a `claw` session starts, no stable correlation ID is emitted in the first structured event (or any event). Every observer — lane event consumer, log aggregator, Clawhip router, test harness — has to infer session identity from timing proximity or prompt content. If two sessions start in close succession there is no unambiguous way to attribute subsequent events to the correct session. `claw status --json` returns session metadata but does not expose an opaque stable ID that could be used as a correlation key across the event stream.
-
-   **Fix shape.**
-   - Emit `session.id` (opaque, stable, scoped to this boot) in the first structured event at startup
-   - Include same ID in all subsequent lane events as `session_id` field
-   - Expose via `claw status --json` so callers can retrieve the active session's ID from outside
-   - Add regression: golden-fixture asserting `session.id` is present in startup event and value matches across a multi-event trace
-
-   **Acceptance.** Any observer can correlate all events from a session using `session_id` without parsing prompt content or relying on timestamp proximity. `claw status --json` exposes the current session's ID.
-
-   **Blocker.** None. Requires a UUID/nanoid generated at session init and threaded through the event emitter.
-
-   **Source.** Jobdori dogfood 2026-04-21 01:54 KST on main HEAD `50e3fa3` during recurring cron cycle. Joins **Session identity completeness at creation time** (ROADMAP §4.7) and **Event provenance / environment labeling** (§4.6). Natural bundle with gaebal-gajae **#241** (no startup run/correlation id) — same root fix closes both. Session tally: ROADMAP #134.
