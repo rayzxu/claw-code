@@ -19,6 +19,7 @@ use super::{preflight_message_request, Provider, ProviderFuture};
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_DASHSCOPE_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+pub const DEFAULT_ANTHROPIC_MESSAGES_BASE_URL: &str = "http://localhost:8000/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -41,6 +42,7 @@ pub struct OpenAiCompatConfig {
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
 const DASHSCOPE_ENV_VARS: &[&str] = &["DASHSCOPE_API_KEY"];
+const ANTHROPIC_MESSAGES_ENV_VARS: &[&str] = &["ANTHROPIC_MESSAGES_API_KEY"];
 
 // Provider-specific request body size limits in bytes
 const XAI_MAX_REQUEST_BODY_BYTES: usize = 52_428_800; // 50MB
@@ -86,11 +88,23 @@ impl OpenAiCompatConfig {
     }
 
     #[must_use]
+    pub const fn anthropic_messages() -> Self {
+        Self {
+            provider_name: "anthropic-messages",
+            api_key_env: "ANTHROPIC_MESSAGES_API_KEY",
+            base_url_env: "ANTHROPIC_MESSAGES_BASE_URL",
+            default_base_url: DEFAULT_ANTHROPIC_MESSAGES_BASE_URL,
+            max_request_body_bytes: OPENAI_MAX_REQUEST_BODY_BYTES,
+        }
+    }
+
+    #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
             "DashScope" => DASHSCOPE_ENV_VARS,
+            "anthropic-messages" => ANTHROPIC_MESSAGES_ENV_VARS,
             _ => &[],
         }
     }
@@ -801,7 +815,10 @@ fn strip_routing_prefix(model: &str) -> &str {
         let prefix = &model[..pos];
         // Only strip if the prefix before "/" is a known routing prefix,
         // not if "/" appears in the middle of the model name for other reasons.
-        if matches!(prefix, "openai" | "xai" | "grok" | "qwen" | "kimi") {
+        if matches!(
+            prefix,
+            "openai" | "xai" | "grok" | "qwen" | "kimi" | "anthropic-messages"
+        ) {
             &model[pos + 1..]
         } else {
             model
@@ -2195,9 +2212,20 @@ mod tests {
 
     #[test]
     fn provider_specific_size_limits_are_correct() {
-        assert_eq!(OpenAiCompatConfig::dashscope().max_request_body_bytes, 6_291_456); // 6MB
-        assert_eq!(OpenAiCompatConfig::openai().max_request_body_bytes, 104_857_600); // 100MB
-        assert_eq!(OpenAiCompatConfig::xai().max_request_body_bytes, 52_428_800); // 50MB
+        assert_eq!(
+            OpenAiCompatConfig::dashscope().max_request_body_bytes,
+            6_291_456
+        ); // 6MB
+        assert_eq!(
+            OpenAiCompatConfig::openai().max_request_body_bytes,
+            104_857_600
+        ); // 100MB
+        assert_eq!(
+            OpenAiCompatConfig::anthropic_messages().max_request_body_bytes,
+            104_857_600
+        ); // 100MB
+        assert_eq!(OpenAiCompatConfig::xai().max_request_body_bytes, 52_428_800);
+        // 50MB
     }
 
     #[test]
@@ -2206,5 +2234,13 @@ mod tests {
         assert_eq!(super::strip_routing_prefix("kimi/kimi-k2.5"), "kimi-k2.5");
         assert_eq!(super::strip_routing_prefix("kimi-k2.5"), "kimi-k2.5"); // no prefix, unchanged
         assert_eq!(super::strip_routing_prefix("kimi/kimi-k1.5"), "kimi-k1.5");
+    }
+
+    #[test]
+    fn strip_routing_prefix_strips_anthropic_messages_provider_prefix() {
+        assert_eq!(
+            super::strip_routing_prefix("anthropic-messages/claude-optus-4.5"),
+            "claude-optus-4.5"
+        );
     }
 }

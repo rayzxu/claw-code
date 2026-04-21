@@ -1009,7 +1009,6 @@ fn suggest_closest_term<'a>(input: &str, candidates: &'a [&'a str]) -> Option<&'
     ranked_suggestions(input, candidates).into_iter().next()
 }
 
-
 fn suggest_similar_subcommand(input: &str) -> Option<Vec<String>> {
     const KNOWN_SUBCOMMANDS: &[&str] = &[
         "help",
@@ -1039,8 +1038,7 @@ fn suggest_similar_subcommand(input: &str) -> Option<Vec<String>> {
             let prefix_match = common_prefix_len(&normalized_input, &normalized_candidate) >= 4;
             let substring_match = normalized_candidate.contains(&normalized_input)
                 || normalized_input.contains(&normalized_candidate);
-            ((distance <= 2) || prefix_match || substring_match)
-                .then_some((distance, *candidate))
+            ((distance <= 2) || prefix_match || substring_match).then_some((distance, *candidate))
         })
         .collect::<Vec<_>>();
     ranked.sort_by(|left, right| left.cmp(right).then_with(|| left.1.cmp(right.1)));
@@ -1059,7 +1057,6 @@ fn common_prefix_len(left: &str, right: &str) -> usize {
         .take_while(|(l, r)| l == r)
         .count()
 }
-
 
 fn looks_like_subcommand_typo(input: &str) -> bool {
     !input.is_empty()
@@ -1275,6 +1272,7 @@ fn resolve_repl_model(cli_model: String) -> String {
 fn provider_label(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "anthropic",
+        ProviderKind::AnthropicMessages => "anthropic-messages",
         ProviderKind::Xai => "xai",
         ProviderKind::OpenAi => "openai",
     }
@@ -3963,7 +3961,6 @@ impl LiveCli {
         println!("{final_text}");
         Ok(())
     }
-
 
     fn run_prompt_compact_json(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(false)?;
@@ -6967,17 +6964,20 @@ impl AnthropicRuntimeClient {
                     .with_prompt_cache(PromptCache::new(session_id));
                 ApiProviderClient::Anthropic(inner)
             }
-            ProviderKind::Xai | ProviderKind::OpenAi => {
+            ProviderKind::AnthropicMessages | ProviderKind::Xai | ProviderKind::OpenAi => {
                 // The api crate's `ProviderClient::from_model_with_anthropic_auth`
                 // with `None` for the anthropic auth routes via
                 // `detect_provider_kind` and builds an
                 // `OpenAiCompatClient::from_env` with the matching
-                // `OpenAiCompatConfig` (openai / xai / dashscope).
+                // `OpenAiCompatConfig` (openai / xai / dashscope /
+                // anthropic-messages).
                 // That reads the correct API-key env var and BASE_URL
                 // override internally, so this one call covers OpenAI,
-                // OpenRouter, xAI, DashScope, Ollama, and any other
-                // OpenAI-compat endpoint users configure via
-                // `OPENAI_BASE_URL` / `XAI_BASE_URL` / `DASHSCOPE_BASE_URL`.
+                // OpenRouter, xAI, DashScope, local anthropic-messages
+                // adapters, Ollama, and any other OpenAI-compat endpoint
+                // users configure via `OPENAI_BASE_URL` /
+                // `XAI_BASE_URL` / `DASHSCOPE_BASE_URL` /
+                // `ANTHROPIC_MESSAGES_BASE_URL`.
                 ApiProviderClient::from_model_with_anthropic_auth(&resolved_model, None)?
             }
         };
@@ -9975,7 +9975,6 @@ mod tests {
         assert!(report.contains("Use /help"));
     }
 
-
     #[test]
     fn typoed_doctor_subcommand_returns_did_you_mean_error() {
         let error = parse_args(&["doctorr".to_string()]).expect_err("doctorr should error");
@@ -10057,7 +10056,6 @@ mod tests {
             }
         );
     }
-
 
     #[test]
     fn punctuation_bearing_single_token_still_dispatches_to_prompt() {

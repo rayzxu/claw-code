@@ -9,6 +9,7 @@ use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 #[derive(Debug, Clone)]
 pub enum ProviderClient {
     Anthropic(AnthropicClient),
+    AnthropicMessages(OpenAiCompatClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
 }
@@ -28,6 +29,9 @@ impl ProviderClient {
                 Some(auth) => AnthropicClient::from_auth(auth),
                 None => AnthropicClient::from_env()?,
             })),
+            ProviderKind::AnthropicMessages => Ok(Self::AnthropicMessages(
+                OpenAiCompatClient::from_env(OpenAiCompatConfig::anthropic_messages())?,
+            )),
             ProviderKind::Xai => Ok(Self::Xai(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::xai(),
             )?)),
@@ -50,6 +54,7 @@ impl ProviderClient {
     pub const fn provider_kind(&self) -> ProviderKind {
         match self {
             Self::Anthropic(_) => ProviderKind::Anthropic,
+            Self::AnthropicMessages(_) => ProviderKind::AnthropicMessages,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
         }
@@ -67,7 +72,7 @@ impl ProviderClient {
     pub fn prompt_cache_stats(&self) -> Option<PromptCacheStats> {
         match self {
             Self::Anthropic(client) => client.prompt_cache_stats(),
-            Self::Xai(_) | Self::OpenAi(_) => None,
+            Self::AnthropicMessages(_) | Self::Xai(_) | Self::OpenAi(_) => None,
         }
     }
 
@@ -75,7 +80,7 @@ impl ProviderClient {
     pub fn take_last_prompt_cache_record(&self) -> Option<PromptCacheRecord> {
         match self {
             Self::Anthropic(client) => client.take_last_prompt_cache_record(),
-            Self::Xai(_) | Self::OpenAi(_) => None,
+            Self::AnthropicMessages(_) | Self::Xai(_) | Self::OpenAi(_) => None,
         }
     }
 
@@ -85,7 +90,9 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::Anthropic(client) => client.send_message(request).await,
-            Self::Xai(client) | Self::OpenAi(client) => client.send_message(request).await,
+            Self::AnthropicMessages(client) | Self::Xai(client) | Self::OpenAi(client) => {
+                client.send_message(request).await
+            }
         }
     }
 
@@ -98,7 +105,7 @@ impl ProviderClient {
                 .stream_message(request)
                 .await
                 .map(MessageStream::Anthropic),
-            Self::Xai(client) | Self::OpenAi(client) => client
+            Self::AnthropicMessages(client) | Self::Xai(client) | Self::OpenAi(client) => client
                 .stream_message(request)
                 .await
                 .map(MessageStream::OpenAiCompat),
@@ -233,6 +240,33 @@ mod tests {
                 );
             }
             other => panic!("Expected ProviderClient::OpenAi for qwen-plus, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_messages_model_uses_local_provider_config() {
+        let _lock = env_lock();
+        let _anthropic_messages = EnvVarGuard::set(
+            "ANTHROPIC_MESSAGES_API_KEY",
+            Some("lgw-c0df4e4a135083f74ef74620a74d23fc"),
+        );
+        let _openai = EnvVarGuard::set("OPENAI_API_KEY", None);
+
+        let client = ProviderClient::from_model("anthropic-messages/claude-optus-4.5");
+
+        assert!(
+            client.is_ok(),
+            "anthropic-messages model should build with ANTHROPIC_MESSAGES_API_KEY, got: {:?}",
+            client.err()
+        );
+
+        match client.unwrap() {
+            ProviderClient::AnthropicMessages(openai_client) => {
+                assert_eq!(openai_client.base_url(), "http://localhost:8000/v1");
+            }
+            other => panic!(
+                "Expected ProviderClient::AnthropicMessages for anthropic-messages/claude-optus-4.5, got: {other:?}"
+            ),
         }
     }
 }
