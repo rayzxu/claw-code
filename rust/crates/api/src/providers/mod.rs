@@ -31,6 +31,7 @@ pub trait Provider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
     Anthropic,
+    AnthropicMessages,
     Xai,
     OpenAi,
 }
@@ -138,6 +139,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "haiku" => "claude-haiku-4-5-20251213",
                     _ => trimmed,
                 },
+                ProviderKind::AnthropicMessages => trimmed,
                 ProviderKind::Xai => match *alias {
                     "grok" | "grok-3" => "grok-3",
                     "grok-mini" | "grok-3-mini" => "grok-3-mini",
@@ -153,6 +155,14 @@ pub fn resolve_model_alias(model: &str) -> String {
 #[must_use]
 pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     let canonical = resolve_model_alias(model);
+    if canonical.starts_with("anthropic-messages/") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::AnthropicMessages,
+            auth_env: "ANTHROPIC_MESSAGES_API_KEY",
+            base_url_env: "ANTHROPIC_MESSAGES_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_ANTHROPIC_MESSAGES_BASE_URL,
+        });
+    }
     if canonical.starts_with("claude") {
         return Some(ProviderMetadata {
             provider: ProviderKind::Anthropic,
@@ -324,6 +334,11 @@ const FOREIGN_PROVIDER_ENV_VARS: &[(&str, &str, &str)] = &[
         "DASHSCOPE_API_KEY",
         "Alibaba DashScope",
         "prefix your model name with `qwen/` or `qwen-` (e.g. `--model qwen-plus`) so prefix routing selects the DashScope backend",
+    ),
+    (
+        "ANTHROPIC_MESSAGES_API_KEY",
+        "anthropic-messages",
+        "prefix your model name with `anthropic-messages/` (e.g. `--model anthropic-messages/claude-optus-4.5`) so prefix routing selects the local Anthropic Messages backend",
     ),
 ];
 
@@ -555,6 +570,51 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_messages_prefix_routes_to_local_openai_compat_backend() {
+        let meta = super::metadata_for_model("anthropic-messages/claude-optus-4.5")
+            .expect("anthropic-messages prefix must resolve to provider metadata");
+        assert_eq!(meta.provider, ProviderKind::AnthropicMessages);
+        assert_eq!(meta.auth_env, "ANTHROPIC_MESSAGES_API_KEY");
+        assert_eq!(meta.base_url_env, "ANTHROPIC_MESSAGES_BASE_URL");
+        assert_eq!(
+            meta.default_base_url,
+            super::openai_compat::DEFAULT_ANTHROPIC_MESSAGES_BASE_URL
+        );
+        assert_eq!(
+            detect_provider_kind("anthropic-messages/claude-optus-4.5"),
+            ProviderKind::AnthropicMessages
+        );
+    }
+
+    #[test]
+    fn kimi_prefix_routes_to_dashscope() {
+        // Kimi models via DashScope (kimi-k2.5, kimi-k1.5, etc.)
+        let meta = super::metadata_for_model("kimi-k2.5")
+            .expect("kimi-k2.5 must resolve to DashScope metadata");
+        assert_eq!(meta.auth_env, "DASHSCOPE_API_KEY");
+        assert_eq!(meta.base_url_env, "DASHSCOPE_BASE_URL");
+        assert!(meta.default_base_url.contains("dashscope.aliyuncs.com"));
+        assert_eq!(meta.provider, ProviderKind::OpenAi);
+
+        // With provider prefix
+        let meta2 = super::metadata_for_model("kimi/kimi-k2.5")
+            .expect("kimi/kimi-k2.5 must resolve to DashScope metadata");
+        assert_eq!(meta2.auth_env, "DASHSCOPE_API_KEY");
+        assert_eq!(meta2.provider, ProviderKind::OpenAi);
+
+        // Different kimi variants
+        let meta3 = super::metadata_for_model("kimi-k1.5")
+            .expect("kimi-k1.5 must resolve to DashScope metadata");
+        assert_eq!(meta3.auth_env, "DASHSCOPE_API_KEY");
+    }
+
+    #[test]
+    fn kimi_alias_resolves_to_kimi_k2_5() {
+        assert_eq!(super::resolve_model_alias("kimi"), "kimi-k2.5");
+        assert_eq!(super::resolve_model_alias("KIMI"), "kimi-k2.5"); // case insensitive
+    }
+
+    #[test]
     fn keeps_existing_max_token_heuristic() {
         assert_eq!(max_tokens_for_model("opus"), 32_000);
         assert_eq!(max_tokens_for_model("grok-3"), 64_000);
@@ -692,6 +752,71 @@ mod tests {
 
         preflight_message_request(&request)
             .expect("models without context metadata should skip the guarded preflight");
+    }
+
+    #[test]
+    fn returns_context_window_metadata_for_kimi_models() {
+        // kimi-k2.5
+        let k25_limit =
+            model_token_limit("kimi-k2.5").expect("kimi-k2.5 should have token limit metadata");
+        assert_eq!(k25_limit.max_output_tokens, 16_384);
+        assert_eq!(k25_limit.context_window_tokens, 256_000);
+
+        // kimi-k1.5
+        let k15_limit =
+            model_token_limit("kimi-k1.5").expect("kimi-k1.5 should have token limit metadata");
+        assert_eq!(k15_limit.max_output_tokens, 16_384);
+        assert_eq!(k15_limit.context_window_tokens, 256_000);
+    }
+
+    #[test]
+    fn kimi_alias_resolves_to_kimi_k25_token_limits() {
+        // The "kimi" alias resolves to "kimi-k2.5" via resolve_model_alias()
+        let alias_limit =
+            model_token_limit("kimi").expect("kimi alias should resolve to kimi-k2.5 limits");
+        let direct_limit = model_token_limit("kimi-k2.5").expect("kimi-k2.5 should have limits");
+        assert_eq!(
+            alias_limit.max_output_tokens,
+            direct_limit.max_output_tokens
+        );
+        assert_eq!(
+            alias_limit.context_window_tokens,
+            direct_limit.context_window_tokens
+        );
+    }
+
+    #[test]
+    fn preflight_blocks_oversized_requests_for_kimi_models() {
+        let request = MessageRequest {
+            model: "kimi-k2.5".to_string(),
+            max_tokens: 16_384,
+            messages: vec![InputMessage {
+                role: "user".to_string(),
+                content: vec![InputContentBlock::Text {
+                    text: "x".repeat(1_000_000), // Large input to exceed context window
+                }],
+            }],
+            system: Some("Keep the answer short.".to_string()),
+            tools: None,
+            tool_choice: None,
+            stream: true,
+            ..Default::default()
+        };
+
+        let error = preflight_message_request(&request)
+            .expect_err("oversized request should be rejected for kimi models");
+
+        match error {
+            ApiError::ContextWindowExceeded {
+                model,
+                context_window_tokens,
+                ..
+            } => {
+                assert_eq!(model, "kimi-k2.5");
+                assert_eq!(context_window_tokens, 256_000);
+            }
+            other => panic!("expected context-window preflight failure, got {other:?}"),
+        }
     }
 
     #[test]
@@ -875,6 +1000,34 @@ NO_EQUALS_LINE
         assert!(
             hint.contains("qwen"),
             "hint should suggest a qwen-prefixed model alias: {hint}"
+        );
+    }
+
+    #[test]
+    fn anthropic_missing_credentials_hint_detects_anthropic_messages_api_key() {
+        let _lock = env_lock();
+        let _openai = EnvVarGuard::set("OPENAI_API_KEY", None);
+        let _xai = EnvVarGuard::set("XAI_API_KEY", None);
+        let _dashscope = EnvVarGuard::set("DASHSCOPE_API_KEY", None);
+        let _anthropic_messages = EnvVarGuard::set(
+            "ANTHROPIC_MESSAGES_API_KEY",
+            Some("lgw-c0df4e4a135083f74ef74620a74d23fc"),
+        );
+
+        let hint = anthropic_missing_credentials_hint()
+            .expect("ANTHROPIC_MESSAGES_API_KEY presence should produce a hint");
+
+        assert!(
+            hint.contains("ANTHROPIC_MESSAGES_API_KEY is set"),
+            "hint should name ANTHROPIC_MESSAGES_API_KEY: {hint}"
+        );
+        assert!(
+            hint.contains("anthropic-messages"),
+            "hint should identify the anthropic-messages provider: {hint}"
+        );
+        assert!(
+            hint.contains("anthropic-messages/"),
+            "hint should suggest the anthropic-messages routing prefix: {hint}"
         );
     }
 

@@ -347,6 +347,53 @@ async fn provider_client_dispatches_xai_requests_from_env() {
     );
 }
 
+#[allow(clippy::await_holding_lock)]
+#[tokio::test]
+async fn provider_client_dispatches_anthropic_messages_requests_from_env() {
+    let _lock = env_lock();
+    let _api_key = ScopedEnvVar::set(
+        "ANTHROPIC_MESSAGES_API_KEY",
+        "lgw-c0df4e4a135083f74ef74620a74d23fc",
+    );
+
+    let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let server = spawn_server(
+        state.clone(),
+        vec![http_response(
+            "200 OK",
+            "application/json",
+            "{\"id\":\"chatcmpl_provider\",\"model\":\"claude-optus-4.5\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"Through anthropic-messages\",\"tool_calls\":[]},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}",
+        )],
+    )
+    .await;
+    let _base_url = ScopedEnvVar::set("ANTHROPIC_MESSAGES_BASE_URL", server.base_url());
+
+    let client = ProviderClient::from_model("anthropic-messages/claude-optus-4.5")
+        .expect("anthropic-messages provider client should be constructed");
+    assert!(matches!(client, ProviderClient::AnthropicMessages(_)));
+
+    let request = MessageRequest {
+        model: "anthropic-messages/claude-optus-4.5".to_string(),
+        ..sample_request(false)
+    };
+    let response = client
+        .send_message(&request)
+        .await
+        .expect("provider-dispatched request should succeed");
+
+    assert_eq!(response.model, "claude-optus-4.5");
+
+    let captured = state.lock().await;
+    let request = captured.first().expect("captured request");
+    assert_eq!(request.path, "/chat/completions");
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer lgw-c0df4e4a135083f74ef74620a74d23fc")
+    );
+    let body: serde_json::Value = serde_json::from_str(&request.body).expect("json body");
+    assert_eq!(body["model"], json!("claude-optus-4.5"));
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CapturedRequest {
     path: String,

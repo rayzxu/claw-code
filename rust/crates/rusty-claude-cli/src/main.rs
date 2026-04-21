@@ -943,6 +943,62 @@ fn suggest_closest_term<'a>(input: &str, candidates: &'a [&'a str]) -> Option<&'
     ranked_suggestions(input, candidates).into_iter().next()
 }
 
+fn suggest_similar_subcommand(input: &str) -> Option<Vec<String>> {
+    const KNOWN_SUBCOMMANDS: &[&str] = &[
+        "help",
+        "version",
+        "status",
+        "sandbox",
+        "doctor",
+        "state",
+        "dump-manifests",
+        "bootstrap-plan",
+        "agents",
+        "mcp",
+        "skills",
+        "system-prompt",
+        "acp",
+        "init",
+        "export",
+        "prompt",
+    ];
+
+    let normalized_input = input.to_ascii_lowercase();
+    let mut ranked = KNOWN_SUBCOMMANDS
+        .iter()
+        .filter_map(|candidate| {
+            let normalized_candidate = candidate.to_ascii_lowercase();
+            let distance = levenshtein_distance(&normalized_input, &normalized_candidate);
+            let prefix_match = common_prefix_len(&normalized_input, &normalized_candidate) >= 4;
+            let substring_match = normalized_candidate.contains(&normalized_input)
+                || normalized_input.contains(&normalized_candidate);
+            ((distance <= 2) || prefix_match || substring_match).then_some((distance, *candidate))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| left.cmp(right).then_with(|| left.1.cmp(right.1)));
+    ranked.dedup_by(|left, right| left.1 == right.1);
+    let suggestions = ranked
+        .into_iter()
+        .map(|(_, candidate)| candidate.to_string())
+        .take(3)
+        .collect::<Vec<_>>();
+    (!suggestions.is_empty()).then_some(suggestions)
+}
+
+fn common_prefix_len(left: &str, right: &str) -> usize {
+    left.chars()
+        .zip(right.chars())
+        .take_while(|(l, r)| l == r)
+        .count()
+}
+
+fn looks_like_subcommand_typo(input: &str) -> bool {
+    !input.is_empty()
+        && input
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() || ch == '-')
+}
+
 fn ranked_suggestions<'a>(input: &str, candidates: &'a [&'a str]) -> Vec<&'a str> {
     let normalized_input = input.trim_start_matches('/').to_ascii_lowercase();
     let mut ranked = candidates
@@ -1119,6 +1175,7 @@ fn resolve_repl_model(cli_model: String) -> String {
 fn provider_label(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "anthropic",
+        ProviderKind::AnthropicMessages => "anthropic-messages",
         ProviderKind::Xai => "xai",
         ProviderKind::OpenAi => "openai",
     }
@@ -3804,6 +3861,31 @@ impl LiveCli {
         self.persist_session()?;
         let final_text = final_assistant_text(&summary);
         println!("{final_text}");
+        Ok(())
+    }
+
+    fn run_prompt_compact_json(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let (mut runtime, hook_abort_monitor) = self.prepare_turn_runtime(false)?;
+        let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
+        let result = runtime.run_turn(input, Some(&mut permission_prompter));
+        hook_abort_monitor.stop();
+        let summary = result?;
+        self.replace_runtime(runtime)?;
+        self.persist_session()?;
+        println!(
+            "{}",
+            json!({
+                "message": final_assistant_text(&summary),
+                "compact": true,
+                "model": self.model,
+                "usage": {
+                    "input_tokens": summary.usage.input_tokens,
+                    "output_tokens": summary.usage.output_tokens,
+                    "cache_creation_input_tokens": summary.usage.cache_creation_input_tokens,
+                    "cache_read_input_tokens": summary.usage.cache_read_input_tokens,
+                },
+            })
+        );
         Ok(())
     }
 
@@ -6740,17 +6822,20 @@ impl AnthropicRuntimeClient {
                     .with_prompt_cache(PromptCache::new(session_id));
                 ApiProviderClient::Anthropic(inner)
             }
-            ProviderKind::Xai | ProviderKind::OpenAi => {
+            ProviderKind::AnthropicMessages | ProviderKind::Xai | ProviderKind::OpenAi => {
                 // The api crate's `ProviderClient::from_model_with_anthropic_auth`
                 // with `None` for the anthropic auth routes via
                 // `detect_provider_kind` and builds an
                 // `OpenAiCompatClient::from_env` with the matching
-                // `OpenAiCompatConfig` (openai / xai / dashscope).
+                // `OpenAiCompatConfig` (openai / xai / dashscope /
+                // anthropic-messages).
                 // That reads the correct API-key env var and BASE_URL
                 // override internally, so this one call covers OpenAI,
-                // OpenRouter, xAI, DashScope, Ollama, and any other
-                // OpenAI-compat endpoint users configure via
-                // `OPENAI_BASE_URL` / `XAI_BASE_URL` / `DASHSCOPE_BASE_URL`.
+                // OpenRouter, xAI, DashScope, local anthropic-messages
+                // adapters, Ollama, and any other OpenAI-compat endpoint
+                // users configure via `OPENAI_BASE_URL` /
+                // `XAI_BASE_URL` / `DASHSCOPE_BASE_URL` /
+                // `ANTHROPIC_MESSAGES_BASE_URL`.
                 ApiProviderClient::from_model_with_anthropic_auth(&resolved_model, None)?
             }
         };
@@ -9699,6 +9784,107 @@ mod tests {
         assert!(report.contains("unknown slash command: /statsu"));
         assert!(report.contains("Did you mean"));
         assert!(report.contains("Use /help"));
+    }
+
+    #[test]
+    fn typoed_doctor_subcommand_returns_did_you_mean_error() {
+        let error = parse_args(&["doctorr".to_string()]).expect_err("doctorr should error");
+        assert!(error.contains("unknown subcommand: doctorr."));
+        assert!(error.contains("Did you mean"));
+        assert!(error.contains("doctor"));
+    }
+
+    #[test]
+    fn typoed_skills_subcommand_returns_did_you_mean_error() {
+        let error = parse_args(&["skilsl".to_string()]).expect_err("skilsl should error");
+        assert!(error.contains("unknown subcommand: skilsl."));
+        assert!(error.contains("skills"));
+    }
+
+    #[test]
+    fn typoed_status_subcommand_returns_did_you_mean_error() {
+        let error = parse_args(&["statuss".to_string()]).expect_err("statuss should error");
+        assert!(error.contains("unknown subcommand: statuss."));
+        assert!(error.contains("status"));
+    }
+
+    #[test]
+    fn typoed_export_subcommand_returns_did_you_mean_error() {
+        let error = parse_args(&["exporrt".to_string()]).expect_err("exporrt should error");
+        assert!(error.contains("unknown subcommand: exporrt."));
+        assert!(error.contains("Did you mean"));
+        assert!(error.contains("export"));
+    }
+
+    #[test]
+    fn typoed_mcp_subcommand_returns_did_you_mean_error() {
+        let error = parse_args(&["mcpp".to_string()]).expect_err("mcpp should error");
+        assert!(error.contains("unknown subcommand: mcpp."));
+        assert!(error.contains("mcp"));
+    }
+
+    #[test]
+    fn multi_word_prompt_still_bypasses_subcommand_typo_guard() {
+        assert_eq!(
+            parse_args(&[
+                "hello".to_string(),
+                "world".to_string(),
+                "this".to_string(),
+                "is".to_string(),
+                "a".to_string(),
+                "prompt".to_string(),
+            ])
+            .expect("multi-word prompt should still parse"),
+            CliAction::Prompt {
+                prompt: "hello world this is a prompt".to_string(),
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+                allowed_tools: None,
+                permission_mode: crate::default_permission_mode(),
+                compact: false,
+                base_commit: None,
+                reasoning_effort: None,
+                allow_broad_cwd: false,
+            }
+        );
+    }
+
+    #[test]
+    fn prompt_subcommand_allows_literal_typo_word() {
+        assert_eq!(
+            parse_args(&["prompt".to_string(), "doctorr".to_string()])
+                .expect("explicit prompt subcommand should allow literal typo word"),
+            CliAction::Prompt {
+                prompt: "doctorr".to_string(),
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+                compact: false,
+                base_commit: None,
+                reasoning_effort: None,
+                allow_broad_cwd: false,
+            }
+        );
+    }
+
+    #[test]
+    fn punctuation_bearing_single_token_still_dispatches_to_prompt() {
+        assert_eq!(
+            parse_args(&["PARITY_SCENARIO:bash_permission_prompt_approved".to_string()])
+                .expect("scenario token should still dispatch to prompt"),
+            CliAction::Prompt {
+                prompt: "PARITY_SCENARIO:bash_permission_prompt_approved".to_string(),
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+                compact: false,
+                base_commit: None,
+                reasoning_effort: None,
+                allow_broad_cwd: false,
+            }
+        );
     }
 
     #[test]

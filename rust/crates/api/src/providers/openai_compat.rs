@@ -19,6 +19,7 @@ use super::{preflight_message_request, Provider, ProviderFuture};
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_DASHSCOPE_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+pub const DEFAULT_ANTHROPIC_MESSAGES_BASE_URL: &str = "http://localhost:8000/v1";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
@@ -36,6 +37,7 @@ pub struct OpenAiCompatConfig {
 const XAI_ENV_VARS: &[&str] = &["XAI_API_KEY"];
 const OPENAI_ENV_VARS: &[&str] = &["OPENAI_API_KEY"];
 const DASHSCOPE_ENV_VARS: &[&str] = &["DASHSCOPE_API_KEY"];
+const ANTHROPIC_MESSAGES_ENV_VARS: &[&str] = &["ANTHROPIC_MESSAGES_API_KEY"];
 
 impl OpenAiCompatConfig {
     #[must_use]
@@ -73,11 +75,22 @@ impl OpenAiCompatConfig {
     }
 
     #[must_use]
+    pub const fn anthropic_messages() -> Self {
+        Self {
+            provider_name: "anthropic-messages",
+            api_key_env: "ANTHROPIC_MESSAGES_API_KEY",
+            base_url_env: "ANTHROPIC_MESSAGES_BASE_URL",
+            default_base_url: DEFAULT_ANTHROPIC_MESSAGES_BASE_URL,
+        }
+    }
+
+    #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
             "xAI" => XAI_ENV_VARS,
             "OpenAI" => OPENAI_ENV_VARS,
             "DashScope" => DASHSCOPE_ENV_VARS,
+            "anthropic-messages" => ANTHROPIC_MESSAGES_ENV_VARS,
             _ => &[],
         }
     }
@@ -776,7 +789,10 @@ fn strip_routing_prefix(model: &str) -> &str {
         let prefix = &model[..pos];
         // Only strip if the prefix before "/" is a known routing prefix,
         // not if "/" appears in the middle of the model name for other reasons.
-        if matches!(prefix, "openai" | "xai" | "grok" | "qwen") {
+        if matches!(
+            prefix,
+            "openai" | "xai" | "grok" | "qwen" | "kimi" | "anthropic-messages"
+        ) {
             &model[pos + 1..]
         } else {
             model
@@ -1792,6 +1808,313 @@ mod tests {
         assert!(
             payload.get("max_completion_tokens").is_none(),
             "gpt-4o must not emit max_completion_tokens"
+        );
+    }
+
+    // ============================================================================
+    // US-009: kimi model compatibility tests
+    // ============================================================================
+
+    #[test]
+    fn model_rejects_is_error_field_detects_kimi_models() {
+        // kimi models (various formats) should be detected
+        assert!(super::model_rejects_is_error_field("kimi-k2.5"));
+        assert!(super::model_rejects_is_error_field("kimi-k1.5"));
+        assert!(super::model_rejects_is_error_field("kimi-moonshot"));
+        assert!(super::model_rejects_is_error_field("KIMI-K2.5")); // case insensitive
+        assert!(super::model_rejects_is_error_field("dashscope/kimi-k2.5")); // with prefix
+        assert!(super::model_rejects_is_error_field("moonshot/kimi-k2.5")); // different prefix
+
+        // Non-kimi models should NOT be detected
+        assert!(!super::model_rejects_is_error_field("gpt-4o"));
+        assert!(!super::model_rejects_is_error_field("gpt-4"));
+        assert!(!super::model_rejects_is_error_field("claude-sonnet-4-6"));
+        assert!(!super::model_rejects_is_error_field("grok-3"));
+        assert!(!super::model_rejects_is_error_field("grok-3-mini"));
+        assert!(!super::model_rejects_is_error_field("xai/grok-3"));
+        assert!(!super::model_rejects_is_error_field("qwen/qwen-plus"));
+        assert!(!super::model_rejects_is_error_field("o1-mini"));
+    }
+
+    #[test]
+    fn translate_message_includes_is_error_for_non_kimi_models() {
+        use crate::types::{InputContentBlock, InputMessage, ToolResultContentBlock};
+
+        // Test with gpt-4o (should include is_error)
+        let message = InputMessage {
+            role: "user".to_string(),
+            content: vec![InputContentBlock::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: vec![ToolResultContentBlock::Text {
+                    text: "Error occurred".to_string(),
+                }],
+                is_error: true,
+            }],
+        };
+
+        let translated = super::translate_message(&message, "gpt-4o");
+        assert_eq!(translated.len(), 1);
+        let tool_msg = &translated[0];
+        assert_eq!(tool_msg["role"], json!("tool"));
+        assert_eq!(tool_msg["tool_call_id"], json!("call_1"));
+        assert_eq!(tool_msg["content"], json!("Error occurred"));
+        assert!(
+            tool_msg.get("is_error").is_some(),
+            "gpt-4o should include is_error field"
+        );
+        assert_eq!(tool_msg["is_error"], json!(true));
+
+        // Test with grok-3 (should include is_error)
+        let message2 = InputMessage {
+            role: "user".to_string(),
+            content: vec![InputContentBlock::ToolResult {
+                tool_use_id: "call_2".to_string(),
+                content: vec![ToolResultContentBlock::Text {
+                    text: "Success".to_string(),
+                }],
+                is_error: false,
+            }],
+        };
+
+        let translated2 = super::translate_message(&message2, "grok-3");
+        assert!(
+            translated2[0].get("is_error").is_some(),
+            "grok-3 should include is_error field"
+        );
+        assert_eq!(translated2[0]["is_error"], json!(false));
+
+        // Test with claude model (should include is_error)
+        let translated3 = super::translate_message(&message, "claude-sonnet-4-6");
+        assert!(
+            translated3[0].get("is_error").is_some(),
+            "claude should include is_error field"
+        );
+    }
+
+    #[test]
+    fn translate_message_excludes_is_error_for_kimi_models() {
+        use crate::types::{InputContentBlock, InputMessage, ToolResultContentBlock};
+
+        // Test with kimi-k2.5 (should EXCLUDE is_error)
+        let message = InputMessage {
+            role: "user".to_string(),
+            content: vec![InputContentBlock::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: vec![ToolResultContentBlock::Text {
+                    text: "Error occurred".to_string(),
+                }],
+                is_error: true,
+            }],
+        };
+
+        let translated = super::translate_message(&message, "kimi-k2.5");
+        assert_eq!(translated.len(), 1);
+        let tool_msg = &translated[0];
+        assert_eq!(tool_msg["role"], json!("tool"));
+        assert_eq!(tool_msg["tool_call_id"], json!("call_1"));
+        assert_eq!(tool_msg["content"], json!("Error occurred"));
+        assert!(
+            tool_msg.get("is_error").is_none(),
+            "kimi-k2.5 must NOT include is_error field (would cause 400 Bad Request)"
+        );
+
+        // Test with kimi-k1.5
+        let translated2 = super::translate_message(&message, "kimi-k1.5");
+        assert!(
+            translated2[0].get("is_error").is_none(),
+            "kimi-k1.5 must NOT include is_error field"
+        );
+
+        // Test with dashscope/kimi-k2.5 (with provider prefix)
+        let translated3 = super::translate_message(&message, "dashscope/kimi-k2.5");
+        assert!(
+            translated3[0].get("is_error").is_none(),
+            "dashscope/kimi-k2.5 must NOT include is_error field"
+        );
+    }
+
+    #[test]
+    fn build_chat_completion_request_kimi_vs_non_kimi_tool_results() {
+        use crate::types::{InputContentBlock, InputMessage, ToolResultContentBlock};
+
+        // Helper to create a request with a tool result
+        let make_request = |model: &str| MessageRequest {
+            model: model.to_string(),
+            max_tokens: 100,
+            messages: vec![
+                InputMessage {
+                    role: "assistant".to_string(),
+                    content: vec![InputContentBlock::ToolUse {
+                        id: "call_1".to_string(),
+                        name: "read_file".to_string(),
+                        input: serde_json::json!({"path": "/tmp/test"}),
+                    }],
+                },
+                InputMessage {
+                    role: "user".to_string(),
+                    content: vec![InputContentBlock::ToolResult {
+                        tool_use_id: "call_1".to_string(),
+                        content: vec![ToolResultContentBlock::Text {
+                            text: "file contents".to_string(),
+                        }],
+                        is_error: false,
+                    }],
+                },
+            ],
+            stream: false,
+            ..Default::default()
+        };
+
+        // Non-kimi model: should have is_error field
+        let request_gpt = make_request("gpt-4o");
+        let payload_gpt = build_chat_completion_request(&request_gpt, OpenAiCompatConfig::openai());
+        let messages_gpt = payload_gpt["messages"].as_array().unwrap();
+        let tool_msg_gpt = messages_gpt.iter().find(|m| m["role"] == "tool").unwrap();
+        assert!(
+            tool_msg_gpt.get("is_error").is_some(),
+            "gpt-4o request should include is_error in tool result"
+        );
+
+        // kimi model: should NOT have is_error field
+        let request_kimi = make_request("kimi-k2.5");
+        let payload_kimi =
+            build_chat_completion_request(&request_kimi, OpenAiCompatConfig::dashscope());
+        let messages_kimi = payload_kimi["messages"].as_array().unwrap();
+        let tool_msg_kimi = messages_kimi.iter().find(|m| m["role"] == "tool").unwrap();
+        assert!(
+            tool_msg_kimi.get("is_error").is_none(),
+            "kimi-k2.5 request must NOT include is_error in tool result (would cause 400)"
+        );
+
+        // Verify both have the essential fields
+        assert_eq!(tool_msg_gpt["tool_call_id"], json!("call_1"));
+        assert_eq!(tool_msg_kimi["tool_call_id"], json!("call_1"));
+        assert_eq!(tool_msg_gpt["content"], json!("file contents"));
+        assert_eq!(tool_msg_kimi["content"], json!("file contents"));
+    }
+
+    // ============================================================================
+    // US-021: Request body size pre-flight check tests
+    // ============================================================================
+
+    #[test]
+    fn estimate_request_body_size_returns_reasonable_estimate() {
+        let request = MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 100,
+            messages: vec![InputMessage::user_text("Hello world".to_string())],
+            stream: false,
+            ..Default::default()
+        };
+
+        let size = super::estimate_request_body_size(&request, OpenAiCompatConfig::openai());
+        // Should be non-zero and reasonable for a small request
+        assert!(size > 0, "estimated size should be positive");
+        assert!(size < 10_000, "small request should be under 10KB");
+    }
+
+    #[test]
+    fn check_request_body_size_passes_for_small_requests() {
+        let request = MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 100,
+            messages: vec![InputMessage::user_text("Hello".to_string())],
+            stream: false,
+            ..Default::default()
+        };
+
+        // Should pass for all providers with a small request
+        assert!(super::check_request_body_size(&request, OpenAiCompatConfig::openai()).is_ok());
+        assert!(super::check_request_body_size(&request, OpenAiCompatConfig::xai()).is_ok());
+        assert!(super::check_request_body_size(&request, OpenAiCompatConfig::dashscope()).is_ok());
+    }
+
+    #[test]
+    fn check_request_body_size_fails_for_dashscope_when_exceeds_6mb() {
+        // Create a request that exceeds DashScope's 6MB limit
+        let large_content = "x".repeat(7_000_000); // 7MB of content
+        let request = MessageRequest {
+            model: "qwen-plus".to_string(),
+            max_tokens: 100,
+            messages: vec![InputMessage::user_text(large_content)],
+            stream: false,
+            ..Default::default()
+        };
+
+        let result = super::check_request_body_size(&request, OpenAiCompatConfig::dashscope());
+        assert!(result.is_err(), "should fail for 7MB request to DashScope");
+
+        let err = result.unwrap_err();
+        match err {
+            crate::error::ApiError::RequestBodySizeExceeded {
+                estimated_bytes,
+                max_bytes,
+                provider,
+            } => {
+                assert_eq!(provider, "DashScope");
+                assert_eq!(max_bytes, 6_291_456); // 6MB limit
+                assert!(estimated_bytes > max_bytes);
+            }
+            _ => panic!("expected RequestBodySizeExceeded error, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn check_request_body_size_allows_large_requests_for_openai() {
+        // Create a request that exceeds DashScope's limit but is under OpenAI's 100MB limit
+        let large_content = "x".repeat(10_000_000); // 10MB of content
+        let request = MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 100,
+            messages: vec![InputMessage::user_text(large_content)],
+            stream: false,
+            ..Default::default()
+        };
+
+        // Should pass for OpenAI (100MB limit)
+        assert!(
+            super::check_request_body_size(&request, OpenAiCompatConfig::openai()).is_ok(),
+            "10MB request should pass for OpenAI's 100MB limit"
+        );
+
+        // Should fail for DashScope (6MB limit)
+        assert!(
+            super::check_request_body_size(&request, OpenAiCompatConfig::dashscope()).is_err(),
+            "10MB request should fail for DashScope's 6MB limit"
+        );
+    }
+
+    #[test]
+    fn provider_specific_size_limits_are_correct() {
+        assert_eq!(
+            OpenAiCompatConfig::dashscope().max_request_body_bytes,
+            6_291_456
+        ); // 6MB
+        assert_eq!(
+            OpenAiCompatConfig::openai().max_request_body_bytes,
+            104_857_600
+        ); // 100MB
+        assert_eq!(
+            OpenAiCompatConfig::anthropic_messages().max_request_body_bytes,
+            104_857_600
+        ); // 100MB
+        assert_eq!(OpenAiCompatConfig::xai().max_request_body_bytes, 52_428_800);
+        // 50MB
+    }
+
+    #[test]
+    fn strip_routing_prefix_strips_kimi_provider_prefix() {
+        // US-023: kimi prefix should be stripped for wire format
+        assert_eq!(super::strip_routing_prefix("kimi/kimi-k2.5"), "kimi-k2.5");
+        assert_eq!(super::strip_routing_prefix("kimi-k2.5"), "kimi-k2.5"); // no prefix, unchanged
+        assert_eq!(super::strip_routing_prefix("kimi/kimi-k1.5"), "kimi-k1.5");
+    }
+
+    #[test]
+    fn strip_routing_prefix_strips_anthropic_messages_provider_prefix() {
+        assert_eq!(
+            super::strip_routing_prefix("anthropic-messages/claude-optus-4.5"),
+            "claude-optus-4.5"
         );
     }
 }
