@@ -298,32 +298,32 @@ fn render_project_context(project_context: &ProjectContext) -> String {
         ));
     }
     lines.extend(prepend_bullets(bullets));
-    // if let Some(status) = &project_context.git_status {
-    //     lines.push(String::new());
-    //     lines.push("Git status snapshot:".to_string());
-    //     lines.push(status.clone());
-    // }
-    // if let Some(ref gc) = project_context.git_context {
-    //     if !gc.recent_commits.is_empty() {
-    //         lines.push(String::new());
-    //         lines.push("Recent commits (last 5):".to_string());
-    //         for c in &gc.recent_commits {
-    //             lines.push(format!("  {} {}", c.hash, c.subject));
-    //         }
-    //     }
-    // }
-    // if let Some(diff) = &project_context.git_diff {
-    //     lines.push(String::new());
-    //     lines.push("Git diff snapshot:".to_string());
-    //     lines.push(diff.clone());
-    // }
-    // if let Some(git_context) = &project_context.git_context {
-    //     let rendered = git_context.render();
-    //     if !rendered.is_empty() {
-    //         lines.push(String::new());
-    //         lines.push(rendered);
-    //     }
-    // }
+    if let Some(status) = &project_context.git_status {
+        lines.push(String::new());
+        lines.push("Git status snapshot:".to_string());
+        lines.push(status.clone());
+    }
+    if let Some(ref gc) = project_context.git_context {
+        if !gc.recent_commits.is_empty() {
+            lines.push(String::new());
+            lines.push("Recent commits (last 5):".to_string());
+            for c in &gc.recent_commits {
+                lines.push(format!("  {} {}", c.hash, c.subject));
+            }
+        }
+    }
+    if let Some(diff) = &project_context.git_diff {
+        lines.push(String::new());
+        lines.push("Git diff snapshot:".to_string());
+        lines.push(diff.clone());
+    }
+    if let Some(git_context) = &project_context.git_context {
+        let rendered = git_context.render();
+        if !rendered.is_empty() {
+            lines.push(String::new());
+            lines.push(rendered);
+        }
+    }
     lines.join("\n")
 }
 

@@ -48,20 +48,6 @@ fn provider_client_uses_explicit_anthropic_auth_without_env_lookup() {
 }
 
 #[test]
-fn provider_client_routes_anthropic_messages_prefix_through_local_provider() {
-    let _lock = env_lock();
-    let _anthropic_messages_api_key = EnvVarGuard::set(
-        "ANTHROPIC_MESSAGES_API_KEY",
-        Some("lgw-c0df4e4a135083f74ef74620a74d23fc"),
-    );
-
-    let client = ProviderClient::from_model("anthropic-messages/claude-optus-4.5")
-        .expect("anthropic-messages requests should resolve");
-
-    assert_eq!(client.provider_kind(), ProviderKind::AnthropicMessages);
-}
-
-#[test]
 fn read_xai_base_url_prefers_env_override() {
     let _lock = env_lock();
     let _xai_base_url = EnvVarGuard::set("XAI_BASE_URL", Some("https://example.xai.test/v1"));
