@@ -48,9 +48,7 @@ impl FailureScenario {
             WorkerFailureKind::TrustGate => Self::TrustPromptUnresolved,
             WorkerFailureKind::PromptDelivery => Self::PromptMisdelivery,
             WorkerFailureKind::Protocol => Self::McpHandshakeFailure,
-            WorkerFailureKind::Provider | WorkerFailureKind::StartupNoEvidence => {
-                Self::ProviderFailure
-            }
+            WorkerFailureKind::Provider => Self::ProviderFailure,
         }
     }
 }

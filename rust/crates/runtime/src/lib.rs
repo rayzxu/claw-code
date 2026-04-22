@@ -83,11 +83,8 @@ pub use hooks::{
     HookAbortSignal, HookEvent, HookProgressEvent, HookProgressReporter, HookRunResult, HookRunner,
 };
 pub use lane_events::{
-    compute_event_fingerprint, dedupe_superseded_commit_events, dedupe_terminal_events,
-    is_terminal_event, BlockedSubphase, EventProvenance, LaneCommitProvenance, LaneEvent,
-    LaneEventBlocker, LaneEventBuilder, LaneEventMetadata, LaneEventName, LaneEventStatus,
-    LaneFailureClass, LaneOwnership, SessionIdentity, ShipMergeMethod, ShipProvenance,
-    WatcherAction,
+    dedupe_superseded_commit_events, LaneCommitProvenance, LaneEvent, LaneEventBlocker,
+    LaneEventName, LaneEventStatus, LaneFailureClass,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
