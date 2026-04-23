@@ -472,7 +472,7 @@ fn get_simple_intro_section(has_output_style: bool) -> String {
         if has_output_style {
             "according to your \"Output Style\" below, which describes how you should respond to user queries."
         } else {
-            "with software engineering tasks."
+            "with resin formulation engineering tasks."
         }
     )
 }
