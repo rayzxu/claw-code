@@ -514,10 +514,10 @@ impl StreamState {
                         continue;
                     }
                 }
-                if let Some(delta_event) = state.delta_event() {
-                    events.push(StreamEvent::ContentBlockDelta(delta_event));
-                }
                 if choice.finish_reason.as_deref() == Some("tool_calls") && !state.stopped {
+                    if let Some(delta_event) = state.delta_event() {
+                        events.push(StreamEvent::ContentBlockDelta(delta_event));
+                    }
                     state.stopped = true;
                     events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
                         index: block_index,
@@ -530,6 +530,9 @@ impl StreamState {
                 if finish_reason == "tool_calls" {
                     for state in self.tool_calls.values_mut() {
                         if state.started && !state.stopped {
+                            if let Some(delta_event) = state.delta_event() {
+                                events.push(StreamEvent::ContentBlockDelta(delta_event));
+                            }
                             state.stopped = true;
                             events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
                                 index: state.block_index(),
@@ -619,7 +622,7 @@ impl ToolCallState {
             self.name = Some(name);
         }
         if let Some(arguments) = tool_call.function.arguments {
-            self.arguments.push_str(&arguments);
+            merge_streamed_tool_arguments(&mut self.arguments, &arguments);
         }
     }
 
@@ -659,6 +662,46 @@ impl ToolCallState {
             },
         })
     }
+}
+
+fn merge_streamed_tool_arguments(existing: &mut String, chunk: &str) {
+    if chunk.is_empty() {
+        return;
+    }
+    if existing.is_empty() {
+        existing.push_str(chunk);
+        return;
+    }
+
+    let existing_trimmed = existing.trim();
+    let chunk_trimmed = chunk.trim();
+    if matches!(existing_trimmed, "{}" | "[]") {
+        existing.clear();
+        existing.push_str(chunk);
+        return;
+    }
+    let existing_complete = serde_json::from_str::<Value>(existing_trimmed).is_ok();
+    let chunk_complete = serde_json::from_str::<Value>(chunk_trimmed).is_ok();
+
+    // Some OpenAI-compatible backends resend the full arguments payload on a
+    // later chunk after first emitting a placeholder like `{}`. Preserve the
+    // newest complete JSON snapshot instead of concatenating two documents.
+    if chunk_complete && (existing_complete || matches!(existing_trimmed, "{}" | "[]")) {
+        existing.clear();
+        existing.push_str(chunk);
+        return;
+    }
+
+    if chunk.starts_with(existing.as_str()) {
+        existing.clear();
+        existing.push_str(chunk);
+        return;
+    }
+    if existing.starts_with(chunk) {
+        return;
+    }
+
+    existing.push_str(chunk);
 }
 
 #[derive(Debug, Deserialize)]

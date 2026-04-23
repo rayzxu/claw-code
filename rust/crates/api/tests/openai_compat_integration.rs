@@ -193,28 +193,28 @@ async fn stream_message_normalizes_text_and_multiple_tool_calls() {
     ));
     assert!(matches!(
         events[4],
-        StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-            index: 1,
-            delta: ContentBlockDelta::InputJsonDelta { .. },
-        })
-    ));
-    assert!(matches!(
-        events[5],
         StreamEvent::ContentBlockStart(ContentBlockStartEvent {
             index: 2,
             content_block: OutputContentBlock::ToolUse { .. },
         })
     ));
     assert!(matches!(
-        events[6],
+        events[5],
         StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-            index: 2,
+            index: 1,
             delta: ContentBlockDelta::InputJsonDelta { .. },
         })
     ));
     assert!(matches!(
-        events[7],
+        events[6],
         StreamEvent::ContentBlockStop(ContentBlockStopEvent { index: 1 })
+    ));
+    assert!(matches!(
+        events[7],
+        StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+            index: 2,
+            delta: ContentBlockDelta::InputJsonDelta { .. },
+        })
     ));
     assert!(matches!(
         events[8],
@@ -231,6 +231,105 @@ async fn stream_message_normalizes_text_and_multiple_tool_calls() {
     let request = captured.first().expect("captured request");
     assert_eq!(request.path, "/chat/completions");
     assert!(request.body.contains("\"stream\":true"));
+}
+
+#[tokio::test]
+async fn stream_message_replaces_placeholder_tool_arguments_snapshot() {
+    let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl_stream\",\"model\":\"grok-3\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"materials_search\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: {\"id\":\"chatcmpl_stream\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"action\\\":\\\"lookup\\\",\\\"materials\\\":[\\\"EL-638\\\"]}\"}}]}}]}\n\n",
+        "data: {\"id\":\"chatcmpl_stream\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let server = spawn_server(
+        state.clone(),
+        vec![http_response_with_headers(
+            "200 OK",
+            "text/event-stream",
+            sse,
+            &[("x-request-id", "req_placeholder_snapshot")],
+        )],
+    )
+    .await;
+
+    let client = OpenAiCompatClient::new("xai-test-key", OpenAiCompatConfig::xai())
+        .with_base_url(server.base_url());
+    let mut stream = client
+        .stream_message(&sample_request(false))
+        .await
+        .expect("stream should start");
+
+    let mut events = Vec::new();
+    while let Some(event) = stream.next_event().await.expect("event should parse") {
+        events.push(event);
+    }
+
+    let tool_input_deltas = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                delta: ContentBlockDelta::InputJsonDelta { partial_json },
+                ..
+            }) => Some(partial_json.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_input_deltas,
+        vec![r#"{"action":"lookup","materials":["EL-638"]}"#]
+    );
+}
+
+#[tokio::test]
+async fn stream_message_drops_placeholder_before_partial_argument_deltas() {
+    let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let sse = concat!(
+        "data: {\"id\":\"chatcmpl_stream\",\"model\":\"grok-3\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"materials_search\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: {\"id\":\"chatcmpl_stream\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"action\\\"\"}}]}}]}\n\n",
+        "data: {\"id\":\"chatcmpl_stream\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\":\\\"lookup\\\",\\\"materials\\\":[\\\"EL-638\\\"]}\"}}]}}]}\n\n",
+        "data: {\"id\":\"chatcmpl_stream\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let server = spawn_server(
+        state.clone(),
+        vec![http_response_with_headers(
+            "200 OK",
+            "text/event-stream",
+            sse,
+            &[("x-request-id", "req_placeholder_partial")],
+        )],
+    )
+    .await;
+
+    let client = OpenAiCompatClient::new("xai-test-key", OpenAiCompatConfig::xai())
+        .with_base_url(server.base_url());
+    let mut stream = client
+        .stream_message(&sample_request(false))
+        .await
+        .expect("stream should start");
+
+    let mut events = Vec::new();
+    while let Some(event) = stream.next_event().await.expect("event should parse") {
+        events.push(event);
+    }
+
+    let tool_input_deltas = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                delta: ContentBlockDelta::InputJsonDelta { partial_json },
+                ..
+            }) => Some(partial_json.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        tool_input_deltas,
+        vec![r#"{"action":"lookup","materials":["EL-638"]}"#]
+    );
 }
 
 #[allow(clippy::await_holding_lock)]
